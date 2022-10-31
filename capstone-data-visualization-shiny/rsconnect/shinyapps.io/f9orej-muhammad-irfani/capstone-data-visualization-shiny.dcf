@@ -1,0 +1,14 @@
+name: capstone-data-visualization-shiny
+title: capstone-data-visualization-shiny
+username:
+account: f9orej-muhammad-irfani
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 7474752
+bundleId: 6459866
+url: https://f9orej-muhammad-irfani.shinyapps.io/capstone-data-visualization-shiny/
+when: 1667233991.02462
+lastSyncTime: 1667233991.02465
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .RData|strava-data/activities/desktop.ini

@@ -1,0 +1,506 @@
+---
+title: "Capstone - Data Visualization : Sport Activities from Strava "
+author: "Muhammad Irfani"
+date: "`r format(Sys.Date(), '%B %e, %Y')`"
+output: 
+  html_document:
+    theme: readable
+    higlight: zenburn
+    toc: true
+    toc_float:
+      collapsed: false
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=TRUE}
+# clear-up the environment
+rm(list = ls())
+
+# chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+```
+
+# Introduction
+
+In this Capstone, I will try to process a dataset using my own record files in Strava. Strava itself is an app to record your exercise activities such as cycling, running, swimming, hiking, etc. From Wikipedia, function of the app is described :
+
+> "Strava records data for a user's activities, which can then be shared with the user's followers or shared publicly. If an activity is shared publicly, Strava automatically groups activities that occur at the same time and place (such as taking part in a marathon, sportive or group ride). An activity's recorded information may include a route summary, elevation (net and unidirectional), speed (average, minimum, maximum), timing (total and moving time), power and heart rate. Activities can be recorded using the mobile app or from devices manufactured by third parties like Garmin, Google Fit, Suunto, and Wahoo. Activities can also be entered manually via the Strava website."
+
+This project will try to describe and plot some statistics data of my activities from 2020 - 2021. Everything in this article is not confidential because the mapping of GPX files was taken before I moved out so every start point is not located from my current address.
+
+The purpose of this project is to try summarize and getting insight from activities records of one person. This will beneficial for anyone who is interested in data processing their records for better exercise plan, compare performance with others or their own-record. 
+
+Feel free to copy, manipulate, or train your data skills with this article and data-set.
+Check out my [Strava Profile](https://www.strava.com/athletes/47225027)
+
+```{r, out.width = "60%", echo = TRUE, fig.align = "center"}
+knitr::include_graphics("images/strava-logo.jpg")
+```
+# Import Data dan Pre-Processing
+
+Importing libraries that will be used in this project. 
+
+## Import Library
+
+```{r}
+# load basic library
+options(scipen = 99) #disable scientific annotation
+library(tidyverse) #collection of library for R
+library(dplyr) #grammar of data manipulation
+library(readr) #reading data
+library(glue) #setting tooltip
+library(scales) # scale for plot
+```
+
+```{r}
+#load library for plotting map
+library(XML) #to read GPX file
+library(OpenStreetMap) #plotting to Open Street
+library(lubridate) #treatment date column
+library(ggmap) #plotting map 
+library(ggplot2) #static plot
+library(raster) #plotting map, to add background data to map
+library(sp) #plotting map complementary
+library(mapview) #interactive map plotting
+library(leaflet)  #interactive map plotting
+library(plotly) #interactive plot
+```
+
+## Import Dataset
+
+```{r, echo = TRUE, results='hide'}
+#Import Dataset
+activities <- read_csv(file = "strava-data/activities.csv")
+
+#Glimpse Dataset
+glimpse(activities)
+```
+Based on the glimpse above, we will remove unnecessary columns to make it easier and lighter for processing the data. We only take this columns for the project (order by default) : 
+
+* **'Activity ID'** = Activity ID refers to unique ID for each activity in the Dataset
+* **'Activity Date'** = Date of Activity is recorder (start)
+* **'Activity Type'** = Type of Activity/Exercise
+* **'Elapsed Time'** = Elapsed Time of Activity 
+* **'Distance'** = Distance traveled in one activity (meter)
+* **'Moving Time'** = Moving Time, elapsed time while moving
+* **'Max Speed'** = Maximum Speed ( Kilometer / Hour )
+* **'Average Speed'** = Average Speed ( Bike = Kilometer / Hour) ( Run = Minutes / Kilometer)
+* **'Elevation Gain'** = Elevation Gain while doing an Activity (meter)
+* **'Average Watts'** = Average Power, calculated from input : Person Weight, Bike Weight, Gradient of Elevation on Track, etc (obtained automatically from Strava)
+* **'Calories'** = Calories Burned in one activity, without calculating Calories Burned while resting.
+* **'Bike'** = Bike ID refers to Bike Type in Profile Database
+* **'Gear'** = Gear ID refers to Equipment in Profile Database
+
+
+```{r}
+#preprocessing data
+
+activities_clean <-
+  activities %>%
+  select('Activity ID',
+         'Activity Date',
+         'Activity Type',
+         'Elapsed Time...15',
+         'Distance...7',
+         'Moving Time',
+         'Max Speed',
+         'Average Speed',
+         'Elevation Gain',
+         'Average Watts',
+         'Calories',
+         'Bike',
+         'Gear') %>%
+  rename('activity_id' = 'Activity ID',
+         'date' = 'Activity Date',
+         'type' = 'Activity Type',
+         'elapsed_time' = 'Elapsed Time...15',
+         'distance' = 'Distance...7',
+         'moving_time' = 'Moving Time',
+         'max_speed' = 'Max Speed',
+         'avg_speed' = 'Average Speed',
+         'elevation_gain' = 'Elevation Gain',
+         'avg_watts' = 'Average Watts',
+         'calories' = 'Calories',
+         'bike_id' = 'Bike',
+         'gear_id' = 'Gear')
+
+activities_clean
+```
+## Data Cleansing
+
+For **'bike_id'** and **'gear_id'** it can be one column because it contains unique id. Combine it as **'equip_id'**.
+
+```{r}
+
+#https://stackoverflow.com/questions/14563531/combine-column-to-remove-nas
+
+activities_clean <-
+  activities_clean %>%
+  mutate(equip_id = coalesce(bike_id, gear_id)) %>%
+  select(-(bike_id:gear_id))
+activities_clean
+```
+
+
+```{r}
+#cek missing value
+
+colSums(is.na(activities_clean))
+```
+Based on Number of Missing Value above, we check that there are several columns that contains missing value. 
+
+* For **'elevation_gain'** it should be an incorrect data because it is impossible that in this activity contains 0 elevation gain since the records only contains outdoor exercise. Therefore it should be removed.
+* For **'avg_watts'** it possible there is no average watts data available because as default Running Activities is not recording, calculating or estimate power.
+* For **'calories'** it can be an incorrect data, it depends if the data is imported from another user (by tagging). By default in Strava, it will not contains calories if the record is recorded by another user. In this case it will be removed.
+* For **'equip_id'** it possible and allowed for user to not input any data in the record. For example if the bike and gear is borrowed so the user don't want to add extra mileage to existing bike_id and gear_id in the profile.
+
+```{r}
+#remove missing value
+
+activities_clean <- 
+  activities_clean %>%
+  filter_at(vars(elevation_gain, calories), all_vars(!is.na(.)))
+colSums(is.na(activities_clean))
+```
+
+
+## Change Column Type
+
+Changing columns into appropriate types for easier processing and data analysis. 
+
+
+
+```{r}
+#change columns type
+activities_clean_final <-
+  activities_clean %>%
+  mutate(
+    type = as_factor(type),
+    equip_id = as_factor(equip_id),
+    activity_id = as.character(activity_id)
+  )
+
+#finding timezone (tz)
+#grep("Jakarta", OlsonNames(), value=TRUE)
+
+#change column date to proper type with lubridate
+
+#input is time in UTC
+activities_clean_final$date <- mdy_hms(activities_clean_final$date, tz="Asia/Jakarta") + hours(7)
+```
+
+```{r}
+glimpse(activities_clean_final)
+```
+
+
+## Further Cleansing
+
+In this part, further cleansing is required to eliminate abnormal record such as abnormal maximum speed, too short moving time or distance. Which suggest that GPS recording error.
+
+
+```{r}
+# find data which activities type is Ride and maximum speed above 120km/hour
+activities_clean_final[activities_clean_final$type == "Ride" & activities_clean_final$max_speed > 120,]
+```
+
+```{r}
+# find data which activities type is Run and maximum pace (below 3minutes/km) (or above 20km/hour) ,which I couldn't do definitely, except I'm a World Class Runner.
+activities_clean_final[activities_clean_final$type == "Run" & activities_clean_final$max_speed > 20,]
+```
+```{r}
+# find data which activities elapsed time is below 15 minutes
+activities_clean_final[activities_clean_final$elapsed_time < 15,]
+```
+
+```{r}
+#applying filter
+
+activities_clean_final <-
+  activities_clean_final %>%
+  filter(activity_id != "3075499358")
+
+#create new columns for time constraint
+activities_clean_final$year_record <- year(activities_clean_final$date)
+activities_clean_final$month_record <- month(activities_clean_final$date, label = TRUE)
+activities_clean_final$hour_record <- hour(activities_clean_final$date)
+
+#take only records from 2020 and 2021
+activities_clean_final <-
+  activities_clean_final %>% 
+  filter(year_record %in% c(2020,2021)) %>%
+  mutate(
+    year_record= as_factor(year_record), 
+    month_record= as_factor(month_record)#, 
+    #hour_record= as_factor(hour_record)
+    )
+
+activities_clean_final
+```
+
+# Data Exploration and Data Visualization
+
+This data will be presented in the Capstone Shiny Dashboard
+
+## Page 1
+
+```{r}
+#data aggregation
+summary_sport <-
+  activities_clean_final %>%
+  summarise(total_moving_time = sum(moving_time),
+            total_calories = sum(calories),
+            total_distance = sum(distance))
+
+summary_sport
+```
+
+```{r}
+#data aggregation
+active_month_2020 <-
+  activities_clean_final %>% 
+  filter(year_record == 2020)
+
+#get month data
+active_month_2020$month_record <- month(active_month_2020$date, label = TRUE)
+  
+active_month_2020 <-
+  active_month_2020 %>%
+  group_by(month_record) %>%
+  summarise(time_total = sum(elapsed_time)) %>%
+  ungroup() %>%
+  mutate(total_hours = time_total/3600) %>%
+  arrange(month_record) %>%
+  mutate(label = glue("Month : {month_record}
+                      Total Hours : {comma(total_hours)}"))
+
+#data aggregation
+active_month_2021 <-
+  activities_clean_final %>% 
+  filter(year_record == 2021)
+
+#get month data
+active_month_2021$month_record <- month(active_month_2021$date, label = TRUE)
+  
+active_month_2021 <-
+  active_month_2021 %>%
+  group_by(month_record) %>%
+  summarise(time_total = sum(elapsed_time)) %>%
+  ungroup() %>%
+  mutate(total_hours = time_total/3600) %>%
+  arrange(month_record) %>%
+  mutate(label = glue("Month : {month_record}
+                      Total Hours : {comma(total_hours)}"))
+```
+
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+active_month_lineplot_2020 <-
+  ggplot(active_month_2020, 
+         mapping = aes (x = month_record, 
+                        group = 1 , 
+                        text = label
+                        )
+         ) + 
+  geom_line(aes(y = total_hours),
+            size = 1,
+            show.legend = FALSE, 
+            color = "red"
+            ) +
+  geom_point(aes(y = total_hours),
+             size = 2,
+             color = "red"
+             ) +
+  scale_y_continuous(labels = comma,
+                     breaks = seq(0,120,20),
+                     limits = c(0, 120)
+                     ) +
+  labs(
+    title = "Month Active 2020",
+    y = "Total Hours",
+    x = "Month"
+  ) +
+  theme_minimal()
+
+active_month_lineplot_2021 <-
+  ggplot(active_month_2021, 
+         mapping = aes (x = month_record, 
+                        group = 1 , 
+                        text = label
+                        )
+         ) + 
+  geom_line(aes(y = total_hours),
+            size = 1,
+            show.legend = FALSE, 
+            color = "red"
+            ) +
+  geom_point(aes(y = total_hours),
+             size = 2,
+             color = "red"
+             ) +
+  scale_y_continuous(labels = comma,
+                     breaks = seq(0,120,20),
+                     limits = c(0, 120)
+                     ) +
+  labs(
+    title = "Month Active 2021",
+    y = "Total Hours",
+    x = "Month"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#data aggregation
+top_sport <-
+  activities_clean_final %>%
+  group_by(type) %>%
+  summarise(time_total = sum(elapsed_time)) %>%
+  ungroup() %>%
+  mutate(total_hours = time_total/3600, 
+         label = glue("Activity Type : {type}
+                      Total Hours : {comma(total_hours)}")) %>%
+  arrange(desc(total_hours))
+
+top_sport
+```
+```{r, echo=FALSE,results='hide'}
+barplot_top_sport <-
+  ggplot(data = top_sport,
+                          mapping = aes(x = total_hours,
+                                        y = reorder(type, total_hours),
+                                        text = label)) + 
+  geom_col(aes(fill = total_hours), show.legend = FALSE) +
+  scale_fill_gradient(low = "orange", high = "red") +
+  labs(
+    title = "Top Sport Total",
+    y = "Activity Type",
+    x = "Total Hours"
+  )
+  theme_minimal()
+
+```
+
+```{r}
+#data aggregation
+fav_hour <-
+  activities_clean_final %>%
+  group_by(hour_record) %>%
+  summarise(total_record = n()) %>%
+  ungroup() %>%
+  mutate(label = glue("Activity Count : {total_record}
+                      Starting Hour : {hour_record}")) %>%
+  arrange(hour_record)
+```
+
+```{r}
+#fav hour lineplot
+fav_hour_lineplot <-
+  ggplot(fav_hour, 
+         mapping = aes (x = hour_record, 
+                        group = 1 , 
+                        text = label
+                        )
+         ) +
+  geom_point(aes(y = total_record),
+             size = 2,
+             color = "red"
+             ) +
+  geom_segment(aes(y = 0,xend = hour_record, yend = total_record),
+               size = 2, 
+               color = "red") +
+  scale_x_continuous(breaks = seq(0,23,1), 
+                     limit = c(0, 23)
+                     ) +
+  scale_y_continuous(breaks = seq(0,150,25),
+                     limits = c(0, 150)
+                     ) +
+  labs(
+    title = "Favorite Hour",
+    y = "Activities Started",
+    x = "Hour"
+  ) +
+  theme_minimal()
+```
+
+## Page 2
+
+```{r}
+#data aggregation
+sport_calories <- 
+  activities_clean_final %>%
+  filter(type == "Ride") %>%
+  group_by(month_record) %>%
+  summarise(total_calories = sum(calories)) %>%
+  ungroup() %>%
+  mutate(label = glue("Total Calories : {comma(total_calories)}
+                      Month : {month_record}")) %>%
+  arrange(month_record)
+```
+```{r}
+#calories lineplot
+sport_calories_lineplot <-
+  ggplot(sport_calories, 
+         mapping = aes (x = month_record, 
+                        group = 1 , 
+                        text = label
+                        )
+         ) + 
+  geom_line(aes(y = total_calories),
+            size = 1,
+            show.legend = FALSE, 
+            color = "red"
+            ) +
+  geom_point(aes(y = total_calories),
+             size = 2,
+             color = "red"
+             ) +
+  scale_y_continuous(labels = comma,
+                     breaks = seq(0,35000,5000),
+                     limits = c(0, 35000)
+                     ) +
+  labs(
+    title = "Calories Burned Each Month",
+    y = "Total Calories",
+    x = "Month"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#top calories by activity id
+top_calories <- 
+  activities_clean_final %>%
+  arrange(desc(calories)) %>%
+  select(activity_id, type, calories, moving_time) %>%
+  mutate(hours = moving_time/3600, 
+         label = glue("Calories : {comma(calories)}
+                      Activity Type : {type}
+                      Moving Hours : {format(round(hours, 2), nsmall = 2)}")) %>%
+  head(10)
+```
+
+```{r}
+#plotting data
+top_calories_barplot <- 
+  ggplot(data = top_calories, 
+         mapping = aes(x = calories, 
+                       y = reorder(activity_id, calories), 
+                       text = label)) + 
+  geom_col(aes(fill = calories), show.legend = FALSE) +
+  scale_fill_gradient(low = "orange", high = "red") +
+  labs(
+    title = "Most Epic Activities",
+    y = "Activity ID",
+    x = "Calories Burned"
+  ) +
+  scale_x_continuous(labels = comma,
+                     breaks = seq(0,6000,500),
+                     limits = c(0, 6000)) +
+  theme_minimal()
+```
