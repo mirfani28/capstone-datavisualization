@@ -1,4 +1,4 @@
 # capstone-datavisualization
 
 FURTHER READING
-https://rpubs.com/mirfani28/964251
+https://rpubs.com/mirfani28/capstone-data-visualization
